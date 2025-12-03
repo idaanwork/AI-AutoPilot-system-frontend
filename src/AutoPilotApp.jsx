@@ -1,29 +1,87 @@
 /*
-AutoPilot AI Systems — React Single Page (Single-file React component)
-
-Instructions:
-- This is a self-contained React component using Tailwind CSS for styling.
-- It defaults to Tailwind utility classes; ensure Tailwind is configured in your project.
-- It uses no external images; replace placeholders with your assets.
-- Default export is the `AutoPilotApp` React component. Import and render in your app.
-
-Setup notes:
-1. Install Tailwind CSS in your React project (https://tailwindcss.com/docs/guides/create-react-app or Vite).
-2. Optional: add Inter/Poppins fonts in your index.html.
-3. Replace CONTACT_EMAIL constant with your email.
-4. Replace demo video src or embed your Loom/MP4.
-
-Files you may want to add:
-- src/components/Hero.jsx (if splitting)
-- public/logo.svg (use the logo from the launch pack)
-
+AutoPilot AI Systems — React Single Page (updated)
+Includes:
+- client-side phone validation (pattern + normalization)
+- optional reCAPTCHA v3 execution before submit (set VITE_RECAPTCHA_SITE_KEY)
+- posts lead to backend /webhooks/lead with recaptchaToken and clientApiKey
 */
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 
 const CONTACT_EMAIL = "hello@autopilotai.example";
 
 export default function AutoPilotApp() {
+  // form state and handler for audit requests
+  const [form, setForm] = useState({ name: '', business: '', phone: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const API = import.meta.env.VITE_API_URL || '';
+  const CLIENT_API_KEY = import.meta.env.VITE_CLIENT_API_KEY || '';
+
+  // preload reCAPTCHA script if key provided (v3)
+  useEffect(() => {
+    const RECAPTCHA_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY || '';
+    if (RECAPTCHA_KEY && !window.__recaptcha_loaded) {
+      const s = document.createElement('script');
+      s.src = `https://www.google.com/recaptcha/api.js?render=${RECAPTCHA_KEY}`;
+      s.async = true;
+      s.onload = () => { window.__recaptcha_loaded = true; };
+      document.head.appendChild(s);
+    }
+  }, []);
+
+  async function validateAndSubmit(e) {
+    e.preventDefault();
+    setSubmitting(true);
+    setMessage('');
+
+    // Normalize and validate phone number (require country code, 8-15 digits)
+    const phoneNorm = (form.phone || '').replace(/[\s\-()]/g, '');
+    const phoneRegex = /^\+?\d{8,15}$/;
+    if (!phoneRegex.test(phoneNorm)) {
+      setMessage('Please enter a valid phone number with country code, e.g. +919876543210');
+      setSubmitting(false);
+      return;
+    }
+
+    // Optional reCAPTCHA v3: execute and get token if site key provided
+    const RECAPTCHA_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY || '';
+    let recaptchaToken = '';
+    if (RECAPTCHA_KEY && window.grecaptcha && window.grecaptcha.execute) {
+      try {
+        recaptchaToken = await window.grecaptcha.execute(RECAPTCHA_KEY, { action: 'submit' });
+      } catch (err) {
+        console.warn('reCAPTCHA execution failed', err);
+      }
+    }
+
+    try {
+      const payload = {
+        lead: { name: form.name, phone: phoneNorm, source: 'site', payload: { business: form.business } },
+        clientApiKey: CLIENT_API_KEY,
+        recaptchaToken
+      };
+
+      const res = await fetch(`${API.replace(/\/+$/,'')}/webhooks/lead`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error('Failed to submit: ' + txt);
+      }
+      setMessage('Thanks — audit requested. We will contact you shortly.');
+      setForm({ name: '', business: '', phone: '' });
+    } catch (err) {
+      console.error(err);
+      setMessage('Error submitting. Please email ' + CONTACT_EMAIL);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 antialiased">
       <header className="bg-white shadow-sm">
@@ -141,12 +199,13 @@ export default function AutoPilotApp() {
             <h2 className="text-2xl font-bold">Book a free audit</h2>
             <p className="text-slate-600 mt-2">15 minutes — we’ll identify the single automation that will move the needle for your business.</p>
 
-            <form className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4" onSubmit={(e)=>{e.preventDefault(); window.location.href = `mailto:${CONTACT_EMAIL}?subject=Audit%20Request`;}}>
-              <input required name="name" placeholder="Your name" className="px-4 py-3 rounded-lg border border-slate-200" />
-              <input required name="business" placeholder="Business name" className="px-4 py-3 rounded-lg border border-slate-200" />
-              <input required name="phone" placeholder="Phone / WhatsApp" className="px-4 py-3 rounded-lg border border-slate-200" />
-              <button className="bg-blue-600 text-white px-4 py-3 rounded-lg">Request Audit</button>
+            <form className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4" onSubmit={validateAndSubmit}>
+              <input required name="name" value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Your name" className="px-4 py-3 rounded-lg border border-slate-200" />
+              <input required name="business" value={form.business} onChange={e=>setForm({...form,business:e.target.value})} placeholder="Business name" className="px-4 py-3 rounded-lg border border-slate-200" />
+              <input required name="phone" value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})} placeholder="Phone / WhatsApp" inputMode="tel" pattern="\+?\d{8,15}" title="Include country code, e.g. +919876543210" className="px-4 py-3 rounded-lg border border-slate-200" />
+              <button type="submit" className="bg-blue-600 text-white px-4 py-3 rounded-lg">{submitting ? 'Sending...' : 'Request Audit'}</button>
             </form>
+            {message && <div className="mt-3 text-sm text-green-600">{message}</div>
 
             <div className="mt-6 text-sm text-slate-500">Or email us at <a href={`mailto:${CONTACT_EMAIL}`} className="text-blue-600">{CONTACT_EMAIL}</a></div>
           </div>
